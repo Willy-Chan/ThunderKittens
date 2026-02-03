@@ -2,6 +2,30 @@
 
 Provides a bunch of *TEMPLATED WRAPPERS* over CUDA: so it feels more pytorchlike.
 
+# TLDR;
+When you are in a TK kernel, **pretend you are a warp/warpgroup** that's operating on a block of data. You load in _TILES_ from global memory, and your warps operate on those <16 x 16> (or multiple of those dimensions) tiles without you having to deal with threadIdx yourself. **KEY POINT: YOU DON'T HAVE TO DEAL WITH THREADIDX FOR OPERATING ON DATA!**
+
+Each kernel is thus a "warp" that is operating on a **block** of work. So given your block of work, start tiling the global memory, and then have your warps do stuff on that global memory! No thread indexing needed (unless you want to do more complicated LCSF stuff).
+
+OH by the way:
+Blocks can have multiple warps, i.e.
+``` cpp
+add_tk<<<4, 128>>>(args);  // 4 blocks × 4 warps per block
+```
+This way you can have multiple warps in the same block "do" stuff in parallel: up to 4 warps can do stuff simultaneously on an H100!
+
+```cpp
+// Each warp can work on different data:
+int warp_id = threadIdx.x / 32;  // 0, 1, 2, or 3
+int tile_idx = blockIdx.x * 4 + warp_id;  // Global tile index
+
+// Warp 0: tile 0, Warp 1: tile 1, Warp 2: tile 2, Warp 3: tile 3
+warp::load(tile, g.input, {0, 0, tile_idx, 0});     // All 4 warps load DIFFERENT tiles in parallel
+```
+Each warp has its own registers, they do NOT share them. But they share the same shared memory pool. 
+
+
+
 # Full Simplest Example
 ```cpp
 #include "kittens.cuh"
@@ -128,3 +152,5 @@ __syncthreads();
 store(g.o, o_s, {0, 0, 0, 0});  // (0,0,0,0) is the destination coordinate where my tile gets stored
 __syncthreads();
 ```
+
+# LAUNCHING TK KERNELS
